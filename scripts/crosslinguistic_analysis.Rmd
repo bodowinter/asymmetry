@@ -1,0 +1,767 @@
+---
+title: "Crosslinguistic Analysis"
+author: "Bodo Winter"
+date: "9/10/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Preprocessing
+
+First, load in data and packages:
+
+```{r message = FALSE, warning = FALSE}
+# Packages:
+
+library(brms)
+library(tidyverse)
+library(reshape2)
+library(effsize)
+
+# Data:
+
+asym <- read_csv('../data/asymmetry.csv')
+SUBTL <- read_csv('../data/SUBTLEX_US.csv') %>%
+  rename(Freq = FREQcount) %>%
+  select(Word, Freq)
+conc <- read_csv('../data/brysbaert_concreteness.csv') %>%
+  rename(Conc = Conc.M) %>%
+  select(Word, Conc)
+```
+
+Show the asymmetry dataset:
+
+```{r}
+asym
+```
+
+We don't have enough symmetrical pairs, so we'll only analyze the symmetrical ones.
+
+```{r sym_exclude}
+asym <- filter(asym, Symmetry == 'asymmetrical')
+```
+
+Explanation: "Unmarked" = source; "marked" = target.
+
+## Merge concreteness and frequency into tibble
+
+For words with multiple translational equivalents, we should compute the average concreteness. Words with translational equivalents can be detected via the presence of "/".
+
+```{r}
+# Initialize empty column:
+
+asym$Conc <- NA
+
+# Loop through and fill column with matches:
+
+for (i in 1:nrow(asym)) {
+  complete_concept <- asym[i, ]$ConceptComplete
+  if (str_detect(complete_concept, '/')) {
+    these_words <- unlist(str_split(complete_concept, '/'))
+    asym[i, ]$Conc <- mean(conc[match(these_words, conc$Word), ]$Conc,
+                           na.rm = TRUE)
+  } else {
+    asym[i, ]$Conc <- conc[match(complete_concept, conc$Word), ]$Conc
+  }
+}
+```
+
+Do the same one for frequency:
+
+```{r}
+# Initialize empty column:
+
+asym$Freq <- NA
+
+# Loop through and fill column with matches:
+
+for (i in 1:nrow(asym)) {
+  complete_concept <- asym[i, ]$ConceptComplete
+  if (str_detect(complete_concept, '/')) {
+    these_words <- unlist(str_split(complete_concept, '/'))
+    asym[i, ]$Freq <- mean(SUBTL[match(these_words, SUBTL$Word), ]$Freq,
+                           na.rm = TRUE)
+  } else {
+    asym[i, ]$Freq <- SUBTL[match(complete_concept, SUBTL$Word), ]$Freq
+  }
+}
+```
+
+How many concepts do we have concreteness data for?
+
+```{r}
+nrow(filter(asym, !is.na(Conc)))
+nrow(asym)
+nrow(filter(asym, !is.na(Conc))) / nrow(asym)
+```
+
+132 out of 142, that's 93%.
+
+What about frequency?
+
+```{r}
+nrow(filter(asym, !is.na(Freq)))
+nrow(asym)
+nrow(filter(asym, !is.na(Freq))) / nrow(asym)
+```
+
+134 out of 142, that's 94%.
+
+Now that we have checked this for frequency, we can set all NAs for frequency to 0, since these are truly not attested in SUBTLEX.
+
+```{r}
+asym <- mutate(asym,
+               Freq = ifelse(is.na(Freq), 0, Freq))
+```
+
+Log transform SUBTLEX frequency after adding +1 for the zeroes (which would otherwise yield infinite values):
+
+```{r log_freq}
+asym <- mutate(asym,
+               LogFreq = log10(Freq + 1))
+```
+
+## Concreteness
+
+Compute the descriptive stats for concreteness:
+
+```{r}
+asym %>%
+  group_by(ConceptType) %>%
+  summarize(Conc.M = mean(Conc, na.rm = TRUE),
+    Conc.SD = sd(Conc, na.rm = TRUE))
+```
+
+Compute effect size for concreteness:
+
+```{r}
+# Find pairs that have an NA which we can't use for paired Cohen's d:
+
+these_pairs <- asym[is.na(asym$Conc), ]$PairName
+
+# Compute Cohen's d for this data:
+
+cohen.d(Conc ~ ConceptType,
+        data = filter(asym,
+                      !(PairName %in% these_pairs)),
+        paired = TRUE)
+
+# Save Cohen's d value for plotting later:
+
+conc_d <- cohen.d(Conc ~ ConceptType,
+                  data = filter(asym,
+                                !(PairName %in% these_pairs)),
+                  paired = TRUE)$estimate
+```
+
+Perform t-test:
+
+```{r}
+t.test(Conc ~ ConceptType,
+       data = filter(asym,
+                     !(PairName %in% these_pairs)),
+       paired = TRUE)
+```
+
+Compute for how many pairs there was a frequency difference.
+
+```{r}
+source_concs <- asym[c(TRUE, FALSE), ]$Conc
+target_concs <- asym[c(FALSE, TRUE), ]$Conc
+conc_diffs <- source_concs - target_concs
+
+sum(conc_diffs > 0, na.rm = TRUE) # how many is this the case
+length(conc_diffs[!is.na(conc_diffs)]) # out of how many
+sum(conc_diffs > 0, na.rm = TRUE) / length(conc_diffs[!is.na(conc_diffs)])
+```
+
+## Frequency
+
+Compute the descriptive stats for concreteness:
+
+```{r}
+asym %>%
+  group_by(ConceptType) %>%
+  summarize(Freq = mean(Freq, na.rm = TRUE),
+            LogFreq.M = mean(LogFreq, na.rm = TRUE),
+            LogFreq.SD = sd(LogFreq, na.rm = TRUE))
+```
+
+Compute effect size for concreteness:
+
+```{r}
+# Compute Cohen's d for this data:
+
+cohen.d(LogFreq ~ ConceptType,
+        data = asym,
+        paired = TRUE)
+
+# Save Cohen's d value for plotting later:
+
+freq_d <- cohen.d(LogFreq ~ ConceptType,
+                  data = asym,
+                  paired = TRUE)$estimate
+```
+
+Perform t-test:
+
+```{r}
+t.test(Freq ~ ConceptType,
+       data = asym,
+       paired = TRUE)
+```
+
+Compute for how many pairs there was a frequency difference.
+
+```{r}
+source_freqs <- asym[c(TRUE, FALSE), ]$LogFreq
+target_freqs <- asym[c(FALSE, TRUE), ]$LogFreq
+freq_diffs <- source_freqs - target_freqs
+
+sum(freq_diffs > 0, na.rm = TRUE) # how many is this the case
+length(freq_diffs[!is.na(freq_diffs)]) # out of how many
+sum(freq_diffs > 0, na.rm = TRUE) / length(freq_diffs[!is.na(freq_diffs)])
+```
+
+## Extension to other corpora
+
+Load the COCA data, which also includes the BNC.
+
+This dataset will NOT be put into the repository as it is proprietary (please see https://corpus.byu.edu/ for how to acquire this data. So, if you want to knit the full document, use eval = FALSE or comment the following sections.
+
+```{r, warning = FALSE, message = FALSE}
+COCA <- read_csv('../data/COCA_freqs.csv')
+```
+
+Get the sum of frequencies per lemma:
+
+```{r}
+COCA <- COCA %>% group_by(L1) %>% 
+  summarize(coca_spok = sum(coca_spok),
+            coca_fic = sum(coca_fic),
+            coca_mag = sum(coca_mag),
+            coca_news = sum(coca_news),
+            coca_acad = sum(coca_acad),
+            bnc_spok = sum(bnc_spok),
+            bnc_fic = sum(bnc_fic),
+            bnc_mag = sum(bnc_mag),
+            bnc_news = sum(bnc_news),
+            bnc_acad = sum(bnc_acad))
+
+# Check:
+
+COCA
+```
+
+Do the same looping business as above for matching (taking averages for translational equivalents):
+
+```{r}
+# Initialize empty column:
+
+asym$COCA_spok <- NA
+asym$COCA_fic <- NA
+asym$COCA_mag <- NA
+asym$COCA_news <- NA
+asym$COCA_acad <- NA
+asym$BNC_spok <- NA
+asym$BNC_fic <- NA
+asym$BNC_mag <- NA
+asym$BNC_news <- NA
+asym$BNC_acad <- NA
+
+# Loop through and fill column with matches:
+
+for (i in 1:nrow(asym)) {
+  complete_concept <- asym[i, ]$ConceptComplete
+  if (str_detect(complete_concept, '/')) {
+    these_words <- unlist(str_split(complete_concept, '/'))
+    
+    # COCA:
+    
+    asym[i, ]$COCA_spok <- mean(COCA[match(these_words, COCA$L1), ]$coca_spok,
+                                na.rm = TRUE)
+    asym[i, ]$COCA_fic <- mean(COCA[match(these_words, COCA$L1), ]$coca_fic,
+                                na.rm = TRUE)
+    asym[i, ]$COCA_mag <- mean(COCA[match(these_words, COCA$L1), ]$coca_mag,
+                                na.rm = TRUE)
+    asym[i, ]$COCA_news <- mean(COCA[match(these_words, COCA$L1), ]$coca_news,
+                                na.rm = TRUE)
+    asym[i, ]$COCA_acad <- mean(COCA[match(these_words, COCA$L1), ]$coca_acad,
+                                na.rm = TRUE)
+    
+    # BNC:
+    
+    asym[i, ]$BNC_spok <- mean(COCA[match(these_words, COCA$L1), ]$bnc_spok,
+                                na.rm = TRUE)
+    asym[i, ]$BNC_fic <- mean(COCA[match(these_words, COCA$L1), ]$bnc_fic,
+                                na.rm = TRUE)
+    asym[i, ]$BNC_mag <- mean(COCA[match(these_words, COCA$L1), ]$bnc_mag,
+                                na.rm = TRUE)
+    asym[i, ]$BNC_news <- mean(COCA[match(these_words, COCA$L1), ]$bnc_news,
+                                na.rm = TRUE)
+    asym[i, ]$BNC_acad <- mean(COCA[match(these_words, COCA$L1), ]$bnc_acad,
+                                na.rm = TRUE)
+    
+  } else {
+    # COCA:
+    
+    asym[i, ]$COCA_spok <- COCA[match(complete_concept, COCA$L1), ]$coca_spok
+    asym[i, ]$COCA_fic <- COCA[match(complete_concept, COCA$L1), ]$coca_fic
+    asym[i, ]$COCA_mag <- COCA[match(complete_concept, COCA$L1), ]$coca_mag
+    asym[i, ]$COCA_news <- COCA[match(complete_concept, COCA$L1), ]$coca_news
+    asym[i, ]$COCA_acad <- COCA[match(complete_concept, COCA$L1), ]$coca_acad
+    
+    # BNC:
+    
+    asym[i, ]$BNC_spok <- COCA[match(complete_concept, COCA$L1), ]$bnc_spok
+    asym[i, ]$BNC_fic <- COCA[match(complete_concept, COCA$L1), ]$bnc_fic
+    asym[i, ]$BNC_mag <- COCA[match(complete_concept, COCA$L1), ]$bnc_mag
+    asym[i, ]$BNC_news <- COCA[match(complete_concept, COCA$L1), ]$bnc_news
+    asym[i, ]$BNC_acad <- COCA[match(complete_concept, COCA$L1), ]$bnc_acad
+
+  }
+}
+```
+
+Set NAs to zero since these are actually not attested:
+
+```{r}
+asym <- mutate(asym,
+               COCA_spok = ifelse(is.na(COCA_spok), 0, COCA_spok),
+               COCA_fic = ifelse(is.na(COCA_fic), 0, COCA_fic),
+               COCA_mag = ifelse(is.na(COCA_mag), 0, COCA_mag),
+               COCA_news = ifelse(is.na(COCA_news), 0, COCA_news),
+               COCA_acad = ifelse(is.na(COCA_acad), 0, COCA_acad),
+               BNC_spok = ifelse(is.na(BNC_spok), 0, BNC_spok),
+               BNC_fic = ifelse(is.na(BNC_fic), 0, BNC_fic),
+               BNC_mag = ifelse(is.na(BNC_mag), 0, BNC_mag),
+               BNC_news = ifelse(is.na(BNC_news), 0, BNC_news),
+               BNC_acad = ifelse(is.na(BNC_news), 0, BNC_news))
+```
+
+Compute log frequencies (+1 because of 0's):
+
+```{r}
+asym <- mutate(asym,
+               COCA_spok = log10(COCA_spok + 1),
+               COCA_fic = log10(COCA_fic + 1),
+               COCA_mag = log10(COCA_mag + 1),
+               COCA_news = log10(COCA_news + 1),
+               COCA_acad = log10(COCA_acad + 1),
+               BNC_spok = log10(BNC_spok + 1),
+               BNC_fic = log10(BNC_fic + 1),
+               BNC_mag = log10(BNC_mag + 1),
+               BNC_news = log10(BNC_news + 1),
+               BNC_acad = log10(BNC_acad + 1))
+```
+
+Compute averages:
+
+```{r}
+asym %>% group_by(ConceptType) %>% 
+  summarize(COCA_spok = mean(COCA_spok),
+            COCA_fic = mean(COCA_fic),
+            COCA_mag = mean(COCA_mag),
+            COCA_news = mean(COCA_news),
+            COCA_acad = mean(COCA_acad),
+            BNC_spok = mean(BNC_spok),
+            BNC_fic = mean(BNC_fic),
+            BNC_mag = mean(BNC_mag),
+            BNC_news = mean(BNC_news),
+            BNC_acad = mean(BNC_acad)) %>% print(width = Inf)
+```
+
+Check Cohen's d for all of these comparisons:
+
+```{r}
+all_cols <- c('spok', 'fic', 'mag', 'news', 'acad')
+all_cols <- c(str_c('COCA_', all_cols),
+              str_c('BNC_', all_cols))
+
+# Check:
+
+all_cols
+
+# Initialize vector t be filled with Cohen's d's as well as p-values:
+
+all_ds <- rep(NA, length(all_cols))
+all_ps <- rep(NA, length(all_cols))
+
+# Loop through and compute Cohen's d:
+
+for (i in seq_along(all_cols)) {
+  my_formula <- as.formula(str_c(all_cols[i], ' ~ ConceptType'))
+  all_ds[i] <- cohen.d(my_formula, data = asym,
+                       paired = TRUE)$estimate
+  all_ps[i] <- t.test(my_formula, data = asym,
+                      paired = TRUE, var.equal = TRUE)$p.val
+}
+```
+
+Check Cohen's d:
+
+```{r}
+round(all_ds, 2)
+```
+
+Check significances:
+
+```{r}
+all(all_ps < 0.05) # all significant
+
+# Correcting for performing 10 tests:
+
+all(p.adjust(all_ps, method = 'bonferroni', n = length(all_cols)) < 0.05)
+```
+
+For all corpora there is a significant difference, even after correcting for performing 10 tests.
+
+Put them into a tibble for reporting:
+
+```{r}
+tibble(Corpus = all_cols,
+       d = all_ds,
+       p.val = all_ps) %>% 
+  arrange(d)
+```
+
+## Google Ngram cross-linguistic analysis
+
+Create a copy of the data frame:
+
+```{r}
+goo_asym <- asym
+```
+
+Load in the data (load in asymmetry again to get a clean data frame):
+
+```{r}
+ngrams <- read_csv('../data/google_ngram_all_langs.csv')
+goo <- read_csv('../data/asymmetry_121_google_translations.csv',
+                col_names = FALSE) %>%
+  rename(Language = X1, Lang_code = X2, Word = X3,
+         Translation = X4, BackTranslation = X5)
+```
+
+Process the Google ngram data. Get only the data after 1980:
+
+```{r goo_1980}
+ngrams <- filter(ngrams, Year > 1980)
+```
+
+Create unique word identifiers (for a few of the Romance languages it may be the same):
+
+```{r goo_unique_ID}
+ngrams <- mutate(ngrams,
+                 UniquePhrase = str_c(Phrase, ':', Language))
+```
+
+Average by unique phrase:
+
+```{r goo_avg_freq}
+ngram_means <- ngrams %>%
+  group_by(UniquePhrase, Phrase, Language) %>%
+  summarize(Frequency = mean(Frequency))
+```
+
+Link back to English phrase:
+
+```{r goo_link_back}
+goo <- mutate(goo,
+              UniquePhrase = str_c(Translation, ':', Language))
+ngram_means <- left_join(ngram_means, goo)
+```
+
+Fix the English bits:
+
+```{r}
+# Row identifier:
+
+english <- ngram_means$Language == 'English'
+
+ngram_means[english, ]$Lang_code <- 'eng'
+ngram_means[english, ]$Word <- ngram_means[english, ]$Phrase
+ngram_means[english, ]$Translation <- ngram_means[english, ]$Phrase
+```
+
+Merge asymmetry data into there:
+
+```{r goo_merge}
+langs <- unique(ngram_means$Language)
+freqs <- matrix(numeric(length(langs) * nrow(goo_asym)), nrow = nrow(goo_asym))
+for (i in seq_along(langs)) {
+  this_df <- filter(ngram_means, Language == langs[i])
+  freqs[, i] <- this_df[match(goo_asym$Word, this_df$Word), ]$Frequency
+	}
+colnames(freqs) <- langs
+colnames(freqs)[ncol(freqs)] <- 'Chinese'
+langs[length(langs)] <- 'Chinese'
+```
+
+Log-transform this:
+
+```{r goo_log10}
+freqs <- apply(freqs, 2, log10)
+```
+
+Bind to data frame:
+
+```{r goo_bind}
+goo_asym <- bind_cols(goo_asym, as.data.frame(freqs))
+```
+
+Make into long data for mixed logistic regression analysis:
+
+```{r goo_long}
+goo_long <- select(goo_asym,
+                   PairName, ConceptType,
+                   Italian:Chinese)
+goo_long <- melt(goo_long,
+                 id.vars = c('PairName', 'ConceptType')) %>%
+  rename(Language = variable, Freq = value) %>% 
+  mutate(Freq_z = Freq - mean(Freq, na.rm = TRUE),
+         Freq_z = Freq_z / sd(Freq_z, na.rm = TRUE))
+```
+
+Create 0/1 coded response variable:
+
+```{r goo_concept01}
+goo_long <- mutate(goo_long,
+                   Concept01 = ifelse(ConceptType == 'unmarked', 1, 0))
+```
+
+Weakly informative priors for beta:
+
+```{r}
+my_priors <- c(prior(normal(0, 3), class = b))
+```
+
+Use all cores for parallel processing:
+
+```{r}
+options(mc.cores=parallel::detectCores())
+```
+
+Control parameters for convergence:
+
+```{r}
+my_controls <- list(adapt_delta = 0.999,
+                    max_treedepth = 13)
+```
+
+Create the model:
+
+```{r cache = TRUE, message = FALSE, warning = FALSE}
+goo_brm <- brm(Concept01 ~ Freq_z +
+                 (1 + Freq_z|PairName) +
+                 (1 + Freq_z|Language),
+               data = goo_long,
+               control = my_controls,
+               prior = my_priors,
+               init = 0,
+               family = bernoulli,
+               seed = 666,
+               iter = 8000, warmup = 4000, chains = 4)
+save(goo_brm, file = '../models/goo_brm.RData')
+```
+
+Summarize the model:
+
+```{r goo_summary}
+summary(goo_brm)
+```
+
+Calculate posterior probability of the effect being below zero:
+
+```{r}
+posts <- posterior_samples(goo_brm)
+sum(posts$b_Freq_z < 0) / nrow(posts)
+```
+
+Check for individual languages:
+
+```{r}
+sum((posts$b_Freq_z + posts$`r_Language[Chinese,Freq_z]`) < 0) / nrow(posts)
+sum((posts$b_Freq_z + posts$`r_Language[Hebrew,Freq_z]`) < 0) / nrow(posts)
+sum((posts$b_Freq_z + posts$`r_Language[Russian,Freq_z]`) < 0) / nrow(posts)
+sum((posts$b_Freq_z + posts$`r_Language[German,Freq_z]`) < 0) / nrow(posts)
+sum((posts$b_Freq_z + posts$`r_Language[French,Freq_z]`) < 0) / nrow(posts)
+sum((posts$b_Freq_z + posts$`r_Language[English,Freq_z]`) < 0) / nrow(posts)
+sum((posts$b_Freq_z + posts$`r_Language[Spanish,Freq_z]`) < 0) / nrow(posts)
+sum((posts$b_Freq_z + posts$`r_Language[Italian,Freq_z]`) < 0) / nrow(posts)
+```
+
+## Plot coefficients per language
+
+Create a table that contains all the coefficients. First, get posterior means:
+
+```{r}
+post_means <- c(mean(posts$b_Freq_z + posts$`r_Language[Chinese,Freq_z]`),
+                mean(posts$b_Freq_z + posts$`r_Language[English,Freq_z]`),
+                mean(posts$b_Freq_z + posts$`r_Language[French,Freq_z]`),
+                mean(posts$b_Freq_z + posts$`r_Language[German,Freq_z]`),
+                mean(posts$b_Freq_z + posts$`r_Language[Hebrew,Freq_z]`),
+                mean(posts$b_Freq_z + posts$`r_Language[Italian,Freq_z]`),
+                mean(posts$b_Freq_z + posts$`r_Language[Russian,Freq_z]`),
+                mean(posts$b_Freq_z + posts$`r_Language[Spanish,Freq_z]`))
+```
+
+Get the lower CIs:
+
+```{r}
+lower_CIs <- c(quantile(posts$b_Freq_z +
+                           posts$`r_Language[Chinese,Freq_z]`, 0.025),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[English,Freq_z]`, 0.025),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[French,Freq_z]`, 0.025),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[German,Freq_z]`, 0.025),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[Hebrew,Freq_z]`, 0.025),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[Italian,Freq_z]`, 0.025),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[Russian,Freq_z]`, 0.025),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[Spanish,Freq_z]`, 0.025))
+```
+
+Get the upper CIs:
+
+```{r}
+upper_CIs <- c(quantile(posts$b_Freq_z +
+                           posts$`r_Language[Chinese,Freq_z]`, 0.975),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[English,Freq_z]`, 0.975),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[French,Freq_z]`, 0.975),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[German,Freq_z]`, 0.975),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[Hebrew,Freq_z]`, 0.975),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[Italian,Freq_z]`, 0.975),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[Russian,Freq_z]`, 0.975),
+                quantile(posts$b_Freq_z +
+                           posts$`r_Language[Spanish,Freq_z]`, 0.975))
+```
+
+List of languages vector:
+
+```{r}
+langs <- c('Chinese', 'English', 'French', 'German', 'Hebrew',
+           'Italian', 'Russian', 'Spanish')
+```
+
+Put all into a tibble:
+
+```{r}
+plot_posts <- tibble(langs,
+                     post_means,
+                     lower_CIs,
+                     upper_CIs)
+
+# Check:
+
+plot_posts
+```
+
+
+Make a plot of this:
+
+```{r, fig.width = 10, fig.height = 6}
+# Main plot aesthetics:
+
+google_p <- plot_posts %>%
+  ggplot(mapping = aes(x = langs, y = post_means))
+
+# Add geoms:
+
+google_p <- google_p +
+  geom_point(pch = 15, size = 2) +
+  geom_errorbar(mapping = aes(ymin = lower_CIs, ymax = upper_CIs),
+                width = 0.2) +
+  geom_hline(yintercept = 0, linetype = 2)
+
+# Add themes and other specs:
+
+google_p <- google_p +
+  theme_classic() +
+  xlab('') +
+  ylab('Logistic regression\ncoefficient of frequency') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,
+                                   face = 'bold', size = 12),
+        axis.title.y = element_text(face = 'bold', size = 16,
+                                    margin = margin(t = 0, r = 15,
+                                                    b = 0, l = 0)),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  ylim(c(0, 4))
+
+# Plot:
+
+google_p
+
+# Save:
+
+ggsave(filename = '../figures/google_ngram.png', plot = google_p,
+       width = 7, height = 5)
+ggsave(filename = '../figures/google_ngram.pdf', plot = google_p,
+       width = 7, height = 5)
+```
+
+
+
+## Bayesian logistic regression model comparing frequency with concreteness:
+
+Prepare data for logistic regression analysis:
+
+```{r prep_data}
+asym <- mutate(asym,
+               Concept01 = ifelse(ConceptType == 'unmarked', 1, 0))
+```
+
+Are frequency and concreteness correlated with each other?
+
+```{r}
+with(asym, cor.test(Conc, Freq))
+```
+
+For comparability, z-score both:
+
+```{r}
+asym <- mutate(asym,
+               Conc_z = Conc - mean(Conc, na.rm = TRUE),
+               Conc_z = Conc_z / sd(Conc_z, na.rm = TRUE),
+               LogFreq_z = LogFreq - mean(LogFreq, na.rm = TRUE),
+               LogFreq_z = LogFreq_z / sd(LogFreq_z, na.rm = TRUE))
+```
+
+Fit the logistic regression model:
+
+```{r logistic_reg, cache = TRUE, message = FALSE, warning = FALSE}
+my_controls <- list(adapt_delta = 0.999,
+                    max_treedepth = 13)
+
+asym_brm <- brm(Concept01 ~ Conc_z + LogFreq_z +
+                  (1 + Conc_z + LogFreq_z|PairName),
+                data = asym,
+                seed = 666,
+                init = 0,
+                prior = my_priors,
+                control = my_controls,
+                family = bernoulli(),
+                iter = 8000, warmup = 4000, chains = 4)
+```
+
+Check model:
+
+```{r}
+summary(asym_brm)
+```
+
