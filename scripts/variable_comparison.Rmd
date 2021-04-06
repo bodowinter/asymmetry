@@ -1,0 +1,627 @@
+---
+title: "Crosslinguistic Analysis"
+author: "Bodo Winter"
+date: "9/10/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Preprocessing
+
+First, load in data and packages:
+
+```{r message = FALSE, warning = FALSE}
+# Packages:
+
+library(tidyverse)
+library(effsize)
+library(ranger)
+# library(tuneRanger)
+library(DMwR)
+
+# Data:
+
+asym <- read_csv('../data/asymmetry.csv')
+SUBTL <- read_csv('../data/SUBTLEX_US.csv')
+conc <- read_csv('../data/brysbaert_concreteness.csv') %>%
+  rename(Conc = Conc.M) %>%
+  select(Word, Conc)
+
+# Additional data after review for random forest / Cohen's d comparison:
+
+SER <- read_csv('../data/juhasz_yap_2013_SER.csv')
+lanc <- read_csv('../data/Lancaster_sensorimotor_norms_for_39707_words.csv') %>% 
+  mutate(Word = str_to_lower(Word))
+ELP <- read_csv('../data/ELP_I106170_09032014.csv') %>% 
+  mutate(Word = str_to_lower(Word)) %>% 
+  filter(!is.na(Word)) %>% 
+  mutate(I_Mean_RT = ifelse(I_Mean_RT == 'NULL', NA, I_Mean_RT),
+         I_NMG_Mean_RT = ifelse(I_NMG_Mean_RT == 'NULL', NA, I_NMG_Mean_RT),
+         I_Mean_RT = as.numeric(I_Mean_RT),
+         I_NMG_Mean_RT = as.numeric(I_NMG_Mean_RT))
+BLP <- read_csv('../data/blp-items.csv')
+war <- read_csv('../data/Ratings_Warriner_et_al.csv')
+AOA <- read_csv('../data/AOA_kuperman.csv')
+
+# Data 2 (suggestions by reviewer 1):
+
+prev <- read_csv('../data/brysbaert_prevalence.csv')
+```
+
+Load the COCA data, which also includes the BNC.
+
+This dataset will NOT be put into the repository as it is proprietary (please see https://corpus.byu.edu/ for how to acquire this data. So, if you want to knit the full document, use eval = FALSE or comment the following sections.
+
+```{r, warning = FALSE, message = FALSE}
+COCA <- read_csv('../data/COCA_freq_CD.csv')
+```
+
+Show the asymmetry dataset:
+
+```{r}
+asym
+```
+
+We don't have enough symmetrical pairs, so we'll only analyze the symmetrical ones.
+
+```{r sym_exclude}
+asym <- filter(asym, Symmetry == 'asymmetrical')
+```
+
+Explanation: "Unmarked" = source; "marked" = target.
+
+## Extension to other corpora
+
+Get the sum of frequencies per lemma:
+
+```{r}
+COCA <- COCA %>% group_by(L1) %>% 
+  summarize(coca_spok = sum(freq_coca_spok),
+            coca_fic = sum(freq_coca_fic),
+            coca_mag = sum(freq_coca_mag),
+            coca_news = sum(freq_coca_news),
+            coca_acad = sum(freq_coca_acad),
+            bnc_spok = sum(freq_bnc_spok),
+            bnc_fic = sum(freq_bnc_fic),
+            bnc_mag = sum(freq_bnc_mag),
+            bnc_news = sum(freq_bnc_news),
+            bnc_acad = sum(freq_bnc_acad),
+            cd_COCA = sum(cd_COCA),
+            cd_BNC = sum(cd_BNC),
+            cd_coca_spok = sum(cd_coca_spok),
+            cd_bnc_spok = sum(cd_bnc_spok))
+
+# Check:
+
+COCA
+```
+
+Do the same looping business as above for matching (taking averages for translational equivalents):
+
+```{r}
+# Initialize empty column:
+
+asym$SUBTL_freq <- as.numeric(rep(NA, nrow(asym)))
+asym$SUBTL_CD <- as.numeric(rep(NA, nrow(asym)))
+asym$conc <- as.numeric(rep(NA, nrow(asym)))
+
+# COCA & BNC:
+
+asym$COCA_spok <- as.numeric(rep(NA, nrow(asym)))
+asym$COCA_fic <- as.numeric(rep(NA, nrow(asym)))
+asym$COCA_mag <- as.numeric(rep(NA, nrow(asym)))
+asym$COCA_news <- as.numeric(rep(NA, nrow(asym)))
+asym$COCA_acad <- as.numeric(rep(NA, nrow(asym)))
+asym$BNC_spok <- as.numeric(rep(NA, nrow(asym)))
+asym$BNC_fic <- as.numeric(rep(NA, nrow(asym)))
+asym$BNC_mag <- as.numeric(rep(NA, nrow(asym)))
+asym$BNC_news <- as.numeric(rep(NA, nrow(asym)))
+asym$BNC_acad <- as.numeric(rep(NA, nrow(asym)))
+asym$cd_COCA <- as.numeric(rep(NA, nrow(asym)))
+asym$cd_BNC <- as.numeric(rep(NA, nrow(asym)))
+asym$cd_coca_spok <- as.numeric(rep(NA, nrow(asym)))
+asym$cd_bnc_spok <- as.numeric(rep(NA, nrow(asym)))
+
+# SER & Lancaster:
+
+asym$SER <- as.numeric(rep(NA, nrow(asym)))
+asym$aud <- as.numeric(rep(NA, nrow(asym)))
+asym$gus <- as.numeric(rep(NA, nrow(asym)))
+asym$hap <- as.numeric(rep(NA, nrow(asym)))
+asym$int <- as.numeric(rep(NA, nrow(asym)))
+asym$olf <- as.numeric(rep(NA, nrow(asym)))
+asym$vis <- as.numeric(rep(NA, nrow(asym)))
+asym$foot_leg <- as.numeric(rep(NA, nrow(asym)))
+asym$hand_arm <- as.numeric(rep(NA, nrow(asym)))
+asym$head <- as.numeric(rep(NA, nrow(asym)))
+asym$mouth <- as.numeric(rep(NA, nrow(asym)))
+asym$torso <- as.numeric(rep(NA, nrow(asym)))
+asym$max_perceptual <- as.numeric(rep(NA, nrow(asym)))
+asym$max_motor <- as.numeric(rep(NA, nrow(asym)))
+asym$excl <- as.numeric(rep(NA, nrow(asym)))
+asym$excl_motor <- as.numeric(rep(NA, nrow(asym)))
+
+# ELP, BLP, AOA, valence, prevalence:
+
+asym$val <- as.numeric(rep(NA, nrow(asym)))
+asym$dom <- as.numeric(rep(NA, nrow(asym)))
+asym$arousal <- as.numeric(rep(NA, nrow(asym)))
+asym$ELP_LDT <- as.numeric(rep(NA, nrow(asym))) # lexical decision task RT
+asym$ELP_naming <- as.numeric(rep(NA, nrow(asym))) # naming task RT
+asym$BLP_RT <- as.numeric(rep(NA, nrow(asym)))
+asym$AOA <- as.numeric(rep(NA, nrow(asym)))
+asym$prev <- as.numeric(rep(NA, nrow(asym)))
+```
+
+Loop through columns and find matches:
+
+```{r}
+# Loop through and fill column with matches:
+
+for (i in 1:nrow(asym)) {
+  complete_concept <- asym[i, ]$ConceptComplete
+  if (str_detect(complete_concept, '/')) {
+    these_words <- unlist(str_split(complete_concept, '/'))
+    
+    # SUBTLEX, concreteness:
+    
+    asym[i, ]$SUBTL_freq <- mean(SUBTL[match(these_words, SUBTL$Word), ]$Lg10WF,
+                                 na.rm = TRUE)
+    asym[i, ]$SUBTL_CD <- mean(SUBTL[match(these_words, SUBTL$Word), ]$Lg10CD,
+                               na.rm = TRUE)
+    asym[i, ]$conc <- mean(conc[match(these_words, conc$Word), ]$Conc,
+                           na.rm = TRUE)
+
+    # SER & Lancaster:
+    
+    asym[i, ]$SER <- mean(SER[match(these_words, SER$Word), ]$SER,
+                          na.rm = TRUE)
+    asym[i, ]$aud <- mean(lanc[match(these_words, lanc$Word), ]$Auditory.mean,
+                          na.rm = TRUE)
+    asym[i, ]$gus <- mean(lanc[match(these_words, lanc$Word), ]$Gustatory.mean,
+                          na.rm = TRUE)
+    asym[i, ]$hap <- mean(lanc[match(these_words, lanc$Word), ]$Haptic.mean,
+                          na.rm = TRUE)
+    asym[i, ]$int <- mean(lanc[match(these_words, lanc$Word), ]$Interoceptive.mean,
+                          na.rm = TRUE)
+    asym[i, ]$olf <- mean(lanc[match(these_words, lanc$Word), ]$Olfactory.mean,
+                          na.rm = TRUE)
+    asym[i, ]$vis <- mean(lanc[match(these_words, lanc$Word), ]$Visual.mean,
+                          na.rm = TRUE)
+    asym[i, ]$foot_leg <- mean(lanc[match(these_words, lanc$Word), ]$Foot_leg.mean,
+                               na.rm = TRUE)
+    asym[i, ]$hand_arm <- mean(lanc[match(these_words, lanc$Word), ]$Hand_arm.mean,
+                               na.rm = TRUE)
+    asym[i, ]$head <- mean(lanc[match(these_words, lanc$Word), ]$Head.mean,
+                           na.rm = TRUE)
+    asym[i, ]$mouth <- mean(lanc[match(these_words, lanc$Word), ]$Mouth.mean,
+                            na.rm = TRUE)
+    asym[i, ]$torso <- mean(lanc[match(these_words, lanc$Word), ]$Torso.mean,
+                            na.rm = TRUE)
+    asym[i, ]$max_perceptual <- mean(lanc[match(these_words, lanc$Word), ]$Max_strength.perceptual,
+                                     na.rm = TRUE)
+    asym[i, ]$max_motor <- mean(lanc[match(these_words, lanc$Word), ]$Max_strength.sensorimotor,
+                                     na.rm = TRUE)
+    asym[i, ]$excl <- mean(lanc[match(these_words, lanc$Word), ]$Exclusivity.perceptual,
+                                     na.rm = TRUE)
+    asym[i, ]$excl_motor <- mean(lanc[match(these_words, lanc$Word), ]$Exclusivity.sensorimotor,
+                                     na.rm = TRUE)
+        
+    # COCA:
+    
+    asym[i, ]$COCA_spok <- mean(COCA[match(these_words, COCA$L1), ]$coca_spok,
+                                na.rm = TRUE)
+    asym[i, ]$COCA_fic <- mean(COCA[match(these_words, COCA$L1), ]$coca_fic,
+                                na.rm = TRUE)
+    asym[i, ]$COCA_mag <- mean(COCA[match(these_words, COCA$L1), ]$coca_mag,
+                                na.rm = TRUE)
+    asym[i, ]$COCA_news <- mean(COCA[match(these_words, COCA$L1), ]$coca_news,
+                                na.rm = TRUE)
+    asym[i, ]$COCA_acad <- mean(COCA[match(these_words, COCA$L1), ]$coca_acad,
+                                na.rm = TRUE)
+    asym[i, ]$cd_COCA <- mean(COCA[match(these_words, COCA$L1), ]$cd_COCA,
+                              na.rm = TRUE)
+    asym[i, ]$cd_coca_spok <- mean(COCA[match(these_words, COCA$L1), ]$cd_coca_spok,
+                                   na.rm = TRUE)
+    
+    # ELP, BLP, valence, AOA:
+    
+    asym$val <- mean(war[match(these_words, war$Word), ]$V.Mean.Sum,
+                              na.rm = TRUE)
+    asym$dom <- mean(war[match(these_words, war$Word), ]$D.Mean.Sum,
+                              na.rm = TRUE)
+    asym$arousal <- mean(war[match(these_words, war$Word), ]$A.Mean.Sum,
+                              na.rm = TRUE)
+    asym$ELP_LDT <- mean(ELP[match(these_words, ELP$Word), ]$I_Mean_RT,
+                         na.rm = TRUE)
+    asym$ELP_naming <- mean(ELP[match(these_words, ELP$Word), ]$I_NMG_Mean_RT,
+                            na.rm = TRUE)
+    asym$BLP_RT <- mean(BLP[match(these_words, BLP$spelling), ]$rt,
+                              na.rm = TRUE)
+    asym$AOA <- mean(AOA[match(these_words, AOA$Word), ]$Rating.Mean,
+                              na.rm = TRUE)
+    asym$prev <- mean(prev[match(these_words, prev$Word), ]$Prevalence,
+                              na.rm = TRUE)
+    
+    # BNC:
+    
+    asym[i, ]$BNC_spok <- mean(COCA[match(these_words, COCA$L1), ]$bnc_spok,
+                                na.rm = TRUE)
+    asym[i, ]$BNC_fic <- mean(COCA[match(these_words, COCA$L1), ]$bnc_fic,
+                                na.rm = TRUE)
+    asym[i, ]$BNC_mag <- mean(COCA[match(these_words, COCA$L1), ]$bnc_mag,
+                                na.rm = TRUE)
+    asym[i, ]$BNC_news <- mean(COCA[match(these_words, COCA$L1), ]$bnc_news,
+                                na.rm = TRUE)
+    asym[i, ]$BNC_acad <- mean(COCA[match(these_words, COCA$L1), ]$bnc_acad,
+                                na.rm = TRUE)
+    asym[i, ]$cd_BNC <- mean(COCA[match(these_words, COCA$L1), ]$cd_BNC,
+                             na.rm = TRUE)
+    asym[i, ]$cd_bnc_spok <- mean(COCA[match(these_words, COCA$L1), ]$cd_bnc_spok,
+                             na.rm = TRUE)
+    
+  } else {
+    
+    # SUBTLEX, concreteness:
+    
+    asym[i, ]$SUBTL_freq <- SUBTL[match(complete_concept, SUBTL$Word), ]$Lg10WF
+    asym[i, ]$SUBTL_CD <- SUBTL[match(complete_concept, SUBTL$Word), ]$Lg10CD
+    asym[i, ]$conc <- conc[match(complete_concept, conc$Word), ]$Conc
+
+    # SER & Lancaster:
+    
+    asym[i, ]$SER <- SER[match(complete_concept, SER$Word), ]$SER
+    asym[i, ]$aud <- lanc[match(complete_concept, lanc$Word), ]$Auditory.mean
+    asym[i, ]$gus <- lanc[match(complete_concept, lanc$Word), ]$Gustatory.mean
+    asym[i, ]$hap <- lanc[match(complete_concept, lanc$Word), ]$Haptic.mean
+    asym[i, ]$int <- lanc[match(complete_concept, lanc$Word), ]$Interoceptive.mean
+    asym[i, ]$olf <- lanc[match(complete_concept, lanc$Word), ]$Olfactory.mean
+    asym[i, ]$vis <- lanc[match(complete_concept, lanc$Word), ]$Visual.mean
+    
+    asym[i, ]$foot_leg <- lanc[match(complete_concept, lanc$Word), ]$Foot_leg.mean
+    asym[i, ]$hand_arm <- lanc[match(complete_concept, lanc$Word), ]$Hand_arm.mean
+    asym[i, ]$head <- lanc[match(complete_concept, lanc$Word), ]$Head.mean
+    asym[i, ]$mouth <- lanc[match(complete_concept, lanc$Word), ]$Mouth.mean
+    asym[i, ]$torso <- lanc[match(complete_concept, lanc$Word), ]$Torso.mean
+
+    asym[i, ]$max_perceptual <- lanc[match(complete_concept, lanc$Word), ]$Max_strength.perceptual
+    asym[i, ]$max_motor <- lanc[match(complete_concept, lanc$Word), ]$Max_strength.sensorimotor
+    asym[i, ]$excl <- lanc[match(complete_concept, lanc$Word), ]$Exclusivity.perceptual
+    asym[i, ]$excl_motor <- lanc[match(complete_concept, lanc$Word), ]$Exclusivity.sensorimotor
+    
+    # ELP, BLP, valence, AOA:
+    
+    asym[i, ]$val <- war[match(complete_concept, war$Word), ]$V.Mean.Sum
+    asym[i, ]$dom <- war[match(complete_concept, war$Word), ]$D.Mean.Sum
+    asym[i, ]$arousal <- war[match(complete_concept, war$Word), ]$A.Mean.Sum
+    
+    asym[i, ]$ELP_LDT <- ELP[match(complete_concept, ELP$Word), ]$I_Mean_RT
+    asym[i, ]$ELP_naming <- ELP[match(complete_concept, ELP$Word), ]$I_NMG_Mean_RT
+    asym[i, ]$BLP_RT <- BLP[match(complete_concept, BLP$spelling), ]$rt
+    
+    asym[i, ]$AOA <- AOA[match(complete_concept, AOA$Word), ]$Rating.Mean
+    asym[i, ]$prev <- prev[match(complete_concept, prev$Word), ]$Prevalence
+    
+    # COCA:
+    
+    asym[i, ]$COCA_spok <- COCA[match(complete_concept, COCA$L1), ]$coca_spok
+    asym[i, ]$COCA_fic <- COCA[match(complete_concept, COCA$L1), ]$coca_fic
+    asym[i, ]$COCA_mag <- COCA[match(complete_concept, COCA$L1), ]$coca_mag
+    asym[i, ]$COCA_news <- COCA[match(complete_concept, COCA$L1), ]$coca_news
+    asym[i, ]$COCA_acad <- COCA[match(complete_concept, COCA$L1), ]$coca_acad
+    asym[i, ]$cd_COCA <- COCA[match(complete_concept, COCA$L1), ]$cd_COCA
+    asym[i, ]$cd_coca_spok <- COCA[match(complete_concept, COCA$L1), ]$cd_coca_spok
+    
+    # BNC:
+    
+    asym[i, ]$BNC_spok <- COCA[match(complete_concept, COCA$L1), ]$bnc_spok
+    asym[i, ]$BNC_fic <- COCA[match(complete_concept, COCA$L1), ]$bnc_fic
+    asym[i, ]$BNC_mag <- COCA[match(complete_concept, COCA$L1), ]$bnc_mag
+    asym[i, ]$BNC_news <- COCA[match(complete_concept, COCA$L1), ]$bnc_news
+    asym[i, ]$BNC_acad <- COCA[match(complete_concept, COCA$L1), ]$bnc_acad
+    asym[i, ]$cd_BNC <- COCA[match(complete_concept, COCA$L1), ]$cd_BNC
+    asym[i, ]$cd_bnc_spok <- COCA[match(complete_concept, COCA$L1), ]$cd_bnc_spok
+  }
+}
+```
+
+
+Set NAs to zero since these are actually not attested:
+
+```{r}
+asym <- mutate(asym,
+               SUBTL_freq = ifelse(is.na(SUBTL_freq), 0, SUBTL_freq),
+               SUBTL_CD = ifelse(is.na(SUBTL_CD), 0, SUBTL_CD),
+               COCA_spok = ifelse(is.na(COCA_spok), 0, COCA_spok),
+               COCA_fic = ifelse(is.na(COCA_fic), 0, COCA_fic),
+               COCA_mag = ifelse(is.na(COCA_mag), 0, COCA_mag),
+               COCA_news = ifelse(is.na(COCA_news), 0, COCA_news),
+               COCA_acad = ifelse(is.na(COCA_acad), 0, COCA_acad),
+               cd_COCA = ifelse(is.na(cd_COCA), 0, cd_COCA),
+               cd_coca_spok = ifelse(is.na(cd_coca_spok), 0, cd_coca_spok),
+               BNC_spok = ifelse(is.na(BNC_spok), 0, BNC_spok),
+               BNC_fic = ifelse(is.na(BNC_fic), 0, BNC_fic),
+               BNC_mag = ifelse(is.na(BNC_mag), 0, BNC_mag),
+               BNC_news = ifelse(is.na(BNC_news), 0, BNC_news),
+               BNC_acad = ifelse(is.na(BNC_news), 0, BNC_news),
+               cd_BNC = ifelse(is.na(cd_BNC), 0, cd_BNC),
+               cd_bnc_spok = ifelse(is.na(cd_bnc_spok), 0, cd_bnc_spok))
+```
+
+Compute log frequencies (+1 because of 0's):
+
+```{r}
+asym <- mutate(asym,
+               COCA_spok = log10(COCA_spok + 1),
+               COCA_fic = log10(COCA_fic + 1),
+               COCA_mag = log10(COCA_mag + 1),
+               COCA_news = log10(COCA_news + 1),
+               COCA_acad = log10(COCA_acad + 1),
+               cd_COCA = log10(cd_COCA + 1),
+               cd_coca_spok = log10(cd_coca_spok + 1),
+               BNC_spok = log10(BNC_spok + 1),
+               BNC_fic = log10(BNC_fic + 1),
+               BNC_mag = log10(BNC_mag + 1),
+               BNC_news = log10(BNC_news + 1),
+               BNC_acad = log10(BNC_acad + 1),
+               cd_BNC = log10(cd_BNC + 1),
+               cd_bnc_spok = log10(cd_bnc_spok + 1))
+```
+
+Compute averages:
+
+```{r}
+asym %>% select(ConceptType,
+                SUBTL_freq:prev) %>% 
+  group_by(ConceptType) %>% 
+  summarize_all(function(x) mean(x, na.rm = TRUE)) %>% 
+  print(width = Inf)
+```
+
+Check how much there's missing per cell:
+
+```{r}
+asym %>% select(SUBTL_freq:prev) %>% 
+  summarize_all(function(x) sum(is.na(x))) %>%
+  print(width = Inf)
+```
+
+Drop SER because we don't have enough data (51 NAs — that's a third of the data lost!):
+
+```{r}
+asym <- select(asym, -SER)
+```
+
+Get all the relevant variables:
+
+```{r}
+my_vars <- select(asym, SUBTL_freq:prev) %>% colnames()
+```
+
+Compute Cohen's d for all vars:
+
+```{r, warning = FALSE, message = FALSE}
+# Setup empty data frame:
+
+cohen_d <- tibble(Variable = my_vars,
+                  d = as.numeric(rep(NA, length(my_vars))))
+
+for (i in seq_along(my_vars)) {
+  this_var <- my_vars[i]
+  
+  # Create formual for Cohen d function call below:
+  
+  this_formula <- as.formula(str_c(this_var, ' ~ ConceptType'))
+  
+  # Find pairs that have an NA which we can't use for paired Cohen's d:
+
+  these_pairs <- asym %>% pull(this_var) %>% is.na()
+  these_pairs <- asym[these_pairs, ] %>% pull(PairName)
+  # these_pairs <- asym[as.vector(is.na(asym[, this_var])), ]$PairName
+  
+  # Compute cohen's d:
+  
+  this_cohen <- cohen.d(this_formula,
+                        data = filter(asym,
+                                      !(PairName %in% these_pairs)),
+                        paired = TRUE)
+  cohen_d[i, ]$d <- this_cohen$estimate
+}
+```
+
+Make into absolute values:
+
+```{r}
+cohen_d <- mutate(cohen_d,
+                  d = abs(d))
+```
+
+Check the highest and lowest:
+
+```{r}
+arrange(cohen_d, desc(d)) %>% 
+  mutate(d = round(d, 2)) %>% 
+  print(n = Inf)
+```
+
+## Fit a random forest for variable importance
+
+Create task object:
+
+```{r}
+asym_task <- bind_cols(asym[, my_vars],
+                       select(asym, ConceptType))
+asym_task <- mutate(asym_task,
+                    ConceptType = as.factor(ConceptType))
+
+# None of the following functions (DMwR or tuneRanger) like tibbles:
+
+asym_task <- as.data.frame(asym_task)
+
+# Central imputed version:
+
+asym_imputed <- centralImputation(asym_task)
+asym_knn <- knnImputation(asym_task)
+```
+
+Make this into class objects:
+
+```{r, eval = FALSE}
+asym_task_imputed <- makeClassifTask(data = asym_imputed,
+                                     target = 'ConceptType')
+asym_task_knn <- makeClassifTask(data = asym_knn,
+                                 target = 'ConceptType')
+```
+
+Tune the trees:
+
+```{r, eval = FALSE}
+set.seed(666) # a nice number
+central_tunes <- tuneRanger(asym_task_imputed,
+                            measure = list(multiclass.brier),
+                            num.trees = 1000, num.threads = 4,
+                            iters = 70, iters.warmup = 30)
+knn_tunes <- tuneRanger(asym_task_knn,
+                        measure = list(multiclass.brier),
+                        num.trees = 1000, num.threads = 4,
+                        iters = 70, iters.warmup = 30)
+```
+
+Check:
+
+```{r, eval = FALSE}
+central_tunes
+knn_tunes
+```
+
+Create a formula:
+
+```{r}
+ranger_formula <- str_c('ConceptType ~ ', str_c(my_vars, collapse = ' + '))
+ranger_formula <- as.formula(ranger_formula)
+```
+
+Run random forests with those specifications:
+
+```{r}
+central_ranger <- ranger(formula = ranger_formula,
+                         probability = FALSE,
+                         data = asym_imputed,
+                         # Values from tuneRanger:
+                         mtry = 1, min.node.size = 4, sample.fraction = 0.3064146,
+                         # Other specs:
+                         num.trees = 1000,
+                         seed = 666,
+                         importance = 'permutation')
+
+knn_ranger <- ranger(formula = ranger_formula,
+                     probability = FALSE,
+                     data = asym_imputed,
+                     # Values from tuneRanger:
+                     mtry = 1, min.node.size = 8, sample.fraction = 0.632883,
+                     # Other specs:
+                     num.trees = 1000,
+                     seed = 666,
+                     importance = 'permutation')
+```
+
+Check the forests:
+
+```{r}
+central_ranger
+knn_ranger
+```
+
+Get the variable importances:
+
+```{r}
+central_imps <- tibble(var = names(central_ranger$variable.importance),
+                       importance = central_ranger$variable.importance)
+knn_imps <- tibble(var = names(knn_ranger$variable.importance),
+                   importance = knn_ranger$variable.importance)
+```
+
+Arrange these data frames:
+
+```{r}
+central_imps <- arrange(central_imps, desc(importance))
+knn_imps <- arrange(knn_imps, desc(importance))
+```
+
+
+Show:
+
+```{r}
+central_imps %>% print(n = Inf)
+knn_imps %>% print(n = Inf)
+```
+
+
+mtry = 1 is recommended by tuneRanger but is quite extreme (each tree is grown based on only a single variable). How does this compare to the heuristic sqrt(k)?
+
+Run random forests with those specifications:
+
+```{r}
+central_ranger <- ranger(formula = ranger_formula,
+                         probability = FALSE,
+                         data = asym_imputed,
+                         # Values from tuneRanger:
+                         mtry = ceiling(length(my_vars)),
+                         min.node.size = 4, sample.fraction = 0.3064146,
+                         # Other specs:
+                         num.trees = 1000,
+                         seed = 666,
+                         importance = 'permutation')
+
+knn_ranger <- ranger(formula = ranger_formula,
+                     probability = FALSE,
+                     data = asym_imputed,
+                     # Values from tuneRanger:
+                     mtry = ceiling(length(my_vars)),
+                     min.node.size = 8, sample.fraction = 0.632883,
+                     # Other specs:
+                     num.trees = 1000,
+                     seed = 666,
+                     importance = 'permutation')
+```
+
+Check the forests:
+
+```{r}
+central_ranger
+knn_ranger
+```
+
+Get the variable importances:
+
+```{r}
+central_imps <- tibble(var = names(central_ranger$variable.importance),
+                       importance = central_ranger$variable.importance)
+knn_imps <- tibble(var = names(knn_ranger$variable.importance),
+                   importance = knn_ranger$variable.importance)
+```
+
+Arrange these data frames:
+
+```{r}
+central_imps <- arrange(central_imps, desc(importance))
+knn_imps <- arrange(knn_imps, desc(importance))
+```
+
+Show:
+
+```{r}
+central_imps %>% print(n = Inf)
+knn_imps %>% print(n = Inf)
+```
+
+
+
+
+
+
+
+
