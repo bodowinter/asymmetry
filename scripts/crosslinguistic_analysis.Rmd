@@ -30,6 +30,47 @@ SUBTL <- read_csv('../data/SUBTLEX_US.csv') %>%
 conc <- read_csv('../data/brysbaert_concreteness.csv') %>%
   rename(Conc = Conc.M) %>%
   select(Word, Conc)
+
+# Google data (third analysis):
+
+ngrams <- read_csv('../data/google_ngram_all_langs.csv')
+goo <- read_csv('../data/asymmetry_121_google_translations.csv',
+                col_names = FALSE) %>%
+  rename(Language = X1, Lang_code = X2, Word = X3,
+         Translation = X4, BackTranslation = X5)
+
+# Data 2 (suggestions by reviewer 1):
+
+prev <- read_csv('../data/brysbaert_prevalence.csv')
+```
+
+Load the COCA data, which also includes the BNC.
+
+This dataset will NOT be put into the repository as it is proprietary (please see https://corpus.byu.edu/ for how to acquire this data. So, if you want to knit the full document, use eval = FALSE or comment the following sections.
+
+```{r, warning = FALSE, message = FALSE}
+COCA <- read_csv('../data/COCA_freqs.csv')
+```
+
+Get the sum of frequency per lemma:
+
+```{r}
+COCA <- COCA %>% group_by(L1) %>% 
+  summarize(coca_spok = sum(coca_spok),
+            coca_fic = sum(coca_fic),
+            coca_mag = sum(coca_mag),
+            coca_news = sum(coca_news),
+            coca_acad = sum(coca_acad),
+            bnc_spok = sum(bnc_spok),
+            bnc_fic = sum(bnc_fic),
+            bnc_mag = sum(bnc_mag),
+            bnc_news = sum(bnc_news),
+            bnc_acad = sum(bnc_acad),
+            bnc_misc = sum(bnc_misc))
+
+# Check:
+
+COCA
 ```
 
 Show the asymmetry dataset:
@@ -53,7 +94,7 @@ For words with multiple translational equivalents, we should compute the average
 ```{r}
 # Initialize empty column:
 
-asym$Conc <- NA
+asym$Conc <- as.numeric(rep(NA, nrow(asym)))
 
 # Loop through and fill column with matches:
 
@@ -69,12 +110,12 @@ for (i in 1:nrow(asym)) {
 }
 ```
 
-Do the same one for frequency:
+Do the same one for frequency (SUBTLEX, original analysis):
 
 ```{r}
 # Initialize empty column:
 
-asym$Freq <- NA
+asym$Freq <- as.numeric(rep(NA, nrow(asym)))
 
 # Loop through and fill column with matches:
 
@@ -86,6 +127,48 @@ for (i in 1:nrow(asym)) {
                            na.rm = TRUE)
   } else {
     asym[i, ]$Freq <- SUBTL[match(complete_concept, SUBTL$Word), ]$Freq
+  }
+}
+```
+
+Do the same for word prevalence:
+
+```{r}
+# Initialize empty column:
+
+asym$prev <- as.numeric(rep(NA, nrow(asym)))
+
+# Loop through and fill column with matches:
+
+for (i in 1:nrow(asym)) {
+  complete_concept <- asym[i, ]$ConceptComplete
+  if (str_detect(complete_concept, '/')) {
+    these_words <- unlist(str_split(complete_concept, '/'))
+    asym[i, ]$prev <- mean(prev[match(these_words, prev$Word), ]$Prevalence,
+                           na.rm = TRUE)
+  } else {
+    asym[i, ]$prev <- prev[match(complete_concept, prev$Word), ]$Prevalence
+  }
+}
+```
+
+Do the same for COCA spoken (based on R1's suggestion):
+
+```{r}
+# Initialize empty column:
+
+asym$coca_spok <- as.numeric(rep(NA, nrow(asym)))
+
+# Loop through and fill column with matches:
+
+for (i in 1:nrow(asym)) {
+  complete_concept <- asym[i, ]$ConceptComplete
+  if (str_detect(complete_concept, '/')) {
+    these_words <- unlist(str_split(complete_concept, '/'))
+    asym[i, ]$coca_spok <- mean(COCA[match(these_words, COCA$L1), ]$coca_spok,
+                           na.rm = TRUE)
+  } else {
+    asym[i, ]$coca_spok <- COCA[match(complete_concept, COCA$L1), ]$coca_spok
   }
 }
 ```
@@ -114,14 +197,16 @@ Now that we have checked this for frequency, we can set all NAs for frequency to
 
 ```{r}
 asym <- mutate(asym,
-               Freq = ifelse(is.na(Freq), 0, Freq))
+               Freq = ifelse(is.na(Freq), 0, Freq),
+               coca_spok = ifelse(is.na(coca_spok), 0, coca_spok))
 ```
 
 Log transform SUBTLEX frequency after adding +1 for the zeroes (which would otherwise yield infinite values):
 
 ```{r log_freq}
 asym <- mutate(asym,
-               LogFreq = log10(Freq + 1))
+               LogFreq = log10(Freq + 1),
+               LogCoca = log10(coca_spok + 1))
 ```
 
 ## Concreteness
@@ -169,8 +254,8 @@ t.test(Conc ~ ConceptType,
 Compute for how many pairs there was a frequency difference.
 
 ```{r}
-source_concs <- asym[c(TRUE, FALSE), ]$Conc
-target_concs <- asym[c(FALSE, TRUE), ]$Conc
+source_concs <- asym[rep(c(TRUE, FALSE), nrow(asym) / 2), ]$Conc
+target_concs <- asym[rep(c(FALSE, TRUE), nrow(asym) / 2), ]$Conc
 conc_diffs <- source_concs - target_concs
 
 sum(conc_diffs > 0, na.rm = TRUE) # how many is this the case
@@ -180,7 +265,9 @@ sum(conc_diffs > 0, na.rm = TRUE) / length(conc_diffs[!is.na(conc_diffs)])
 
 ## Frequency
 
-Compute the descriptive stats for concreteness:
+**Note:** Our original analysis was with SUBTLEX, but R1 convinced us to report COCA instead. This is kept in here for continuity with the previous version to clarify how things have changed throughout the review process.
+
+Compute the descriptive stats for SUBTLEX frequency:
 
 ```{r}
 asym %>%
@@ -190,7 +277,7 @@ asym %>%
             LogFreq.SD = sd(LogFreq, na.rm = TRUE))
 ```
 
-Compute effect size for concreteness:
+Compute effect size for SUBTLEX frequency:
 
 ```{r}
 # Compute Cohen's d for this data:
@@ -217,8 +304,8 @@ t.test(Freq ~ ConceptType,
 Compute for how many pairs there was a frequency difference.
 
 ```{r}
-source_freqs <- asym[c(TRUE, FALSE), ]$LogFreq
-target_freqs <- asym[c(FALSE, TRUE), ]$LogFreq
+source_freqs <- asym[rep(c(TRUE, FALSE), nrow(asym) / 2), ]$LogFreq
+target_freqs <- asym[rep(c(FALSE, TRUE), nrow(asym) / 2), ]$LogFreq
 freq_diffs <- source_freqs - target_freqs
 
 sum(freq_diffs > 0, na.rm = TRUE) # how many is this the case
@@ -226,15 +313,112 @@ length(freq_diffs[!is.na(freq_diffs)]) # out of how many
 sum(freq_diffs > 0, na.rm = TRUE) / length(freq_diffs[!is.na(freq_diffs)])
 ```
 
-## Extension to other corpora
+## R1 suggestion: COCA instead of SUBTLEX
 
-Load the COCA data, which also includes the BNC.
+Compute the descriptive stats for SUBTLEX frequency:
 
-This dataset will NOT be put into the repository as it is proprietary (please see https://corpus.byu.edu/ for how to acquire this data. So, if you want to knit the full document, use eval = FALSE or comment the following sections.
-
-```{r, warning = FALSE, message = FALSE}
-COCA <- read_csv('../data/COCA_freqs.csv')
+```{r}
+asym %>%
+  group_by(ConceptType) %>%
+  summarize(coca_spok = mean(coca_spok, na.rm = TRUE),
+            LogCoca_M = mean(LogCoca, na.rm = TRUE),
+            LogCoca_SD = sd(LogCoca, na.rm = TRUE))
 ```
+
+Compute effect size for COCA frequency:
+
+```{r}
+# Compute Cohen's d for this data:
+
+cohen.d(LogCoca ~ ConceptType,
+        data = asym,
+        paired = TRUE)
+
+# Save Cohen's d value for plotting later:
+
+freq_d <- cohen.d(LogCoca ~ ConceptType,
+                  data = asym,
+                  paired = TRUE)$estimate
+```
+
+Perform t-test:
+
+```{r}
+t.test(LogCoca ~ ConceptType,
+       data = asym,
+       paired = TRUE)
+```
+
+Compute for how many pairs there was a frequency difference.
+
+```{r}
+source_freqs <- asym[rep(c(TRUE, FALSE), nrow(asym) / 2), ]$LogCoca
+target_freqs <- asym[rep(c(FALSE, TRUE), nrow(asym) / 2), ]$LogCoca
+freq_diffs <- source_freqs - target_freqs
+
+sum(freq_diffs > 0, na.rm = TRUE) # how many is this the case
+length(freq_diffs[!is.na(freq_diffs)]) # out of how many
+sum(freq_diffs > 0, na.rm = TRUE) / length(freq_diffs[!is.na(freq_diffs)])
+```
+
+
+
+## R1 suggestion: Prevalence
+
+Compute the descriptive stats for concreteness:
+
+```{r}
+asym %>%
+  group_by(ConceptType) %>%
+  summarize(prev.M = mean(prev, na.rm = TRUE),
+            prev.SD = sd(prev, na.rm = TRUE))
+```
+
+Compute effect size for concreteness:
+
+```{r}
+# Find pairs that have an NA which we can't use for paired Cohen's d:
+
+these_pairs <- asym[is.na(asym$prev), ]$PairName
+
+# Compute Cohen's d for this data:
+
+cohen.d(prev ~ ConceptType,
+        data = filter(asym,
+                      !(PairName %in% these_pairs)),
+        paired = TRUE)
+
+# Save Cohen's d value for plotting later:
+
+prev_d <- cohen.d(prev ~ ConceptType,
+                  data = filter(asym,
+                                !(PairName %in% these_pairs)),
+                  paired = TRUE)$estimate
+```
+
+Perform t-test:
+
+```{r}
+t.test(prev ~ ConceptType,
+       data = filter(asym,
+                     !(PairName %in% these_pairs)),
+       paired = TRUE)
+```
+
+Compute for how many pairs there was a frequency difference.
+
+```{r}
+source_concs <- asym[rep(c(TRUE, FALSE), nrow(asym) / 2), ]$prev
+target_concs <- asym[rep(c(FALSE, TRUE), nrow(asym) / 2), ]$prev
+prev_diffs <- source_concs - target_concs
+
+sum(prev_diffs > 0, na.rm = TRUE) # how many is this the case
+length(prev_diffs[!is.na(prev_diffs)]) # out of how many
+sum(prev_diffs > 0, na.rm = TRUE) / length(prev_diffs[!is.na(prev_diffs)])
+```
+
+
+## Extension to other corpora
 
 Get the sum of frequencies per lemma:
 
@@ -261,16 +445,16 @@ Do the same looping business as above for matching (taking averages for translat
 ```{r}
 # Initialize empty column:
 
-asym$COCA_spok <- NA
-asym$COCA_fic <- NA
-asym$COCA_mag <- NA
-asym$COCA_news <- NA
-asym$COCA_acad <- NA
-asym$BNC_spok <- NA
-asym$BNC_fic <- NA
-asym$BNC_mag <- NA
-asym$BNC_news <- NA
-asym$BNC_acad <- NA
+asym$COCA_spok <- as.numeric(rep(NA, nrow(asym)))
+asym$COCA_fic <- as.numeric(rep(NA, nrow(asym)))
+asym$COCA_mag <- as.numeric(rep(NA, nrow(asym)))
+asym$COCA_news <- as.numeric(rep(NA, nrow(asym)))
+asym$COCA_acad <- as.numeric(rep(NA, nrow(asym)))
+asym$BNC_spok <- as.numeric(rep(NA, nrow(asym)))
+asym$BNC_fic <- as.numeric(rep(NA, nrow(asym)))
+asym$BNC_mag <- as.numeric(rep(NA, nrow(asym)))
+asym$BNC_news <- as.numeric(rep(NA, nrow(asym)))
+asym$BNC_acad <- as.numeric(rep(NA, nrow(asym)))
 
 # Loop through and fill column with matches:
 
@@ -376,7 +560,7 @@ asym %>% group_by(ConceptType) %>%
 
 Check Cohen's d for all of these comparisons:
 
-```{r}
+```{r, warning = FALSE, message = FALSE}
 all_cols <- c('spok', 'fic', 'mag', 'news', 'acad')
 all_cols <- c(str_c('COCA_', all_cols),
               str_c('BNC_', all_cols))
@@ -434,16 +618,6 @@ Create a copy of the data frame:
 
 ```{r}
 goo_asym <- asym
-```
-
-Load in the data (load in asymmetry again to get a clean data frame):
-
-```{r}
-ngrams <- read_csv('../data/google_ngram_all_langs.csv')
-goo <- read_csv('../data/asymmetry_121_google_translations.csv',
-                col_names = FALSE) %>%
-  rename(Language = X1, Lang_code = X2, Word = X3,
-         Translation = X4, BackTranslation = X5)
 ```
 
 Process the Google ngram data. Get only the data after 1980:
@@ -536,7 +710,7 @@ goo_long <- mutate(goo_long,
 Weakly informative priors for beta:
 
 ```{r}
-my_priors <- c(prior(normal(0, 3), class = b))
+my_priors <- c(prior(normal(0, 1), class = b))
 ```
 
 Use all cores for parallel processing:
